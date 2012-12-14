@@ -32,6 +32,11 @@ object RiscShieldServer {
 //        if (counter % 100 == 0) {
 //          println(s"count: $counter elapsed ${System.currentTimeMillis - startTime}")
 //        }
+        val i = input.toInt 
+              if(i== 1) println(System.currentTimeMillis())
+      if(i % 100000 == 0) println(input)
+      if(i == 1000000) println(System.currentTimeMillis())
+
         if(input.startsWith("stop")) {
           ref ! "shutdown"
           scheduler.scheduleOnce(10 seconds) {

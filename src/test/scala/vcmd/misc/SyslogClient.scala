@@ -2,6 +2,7 @@ package vcmd.misc
 
 import org.productivity.java.syslog4j._
 import org.productivity.java.syslog4j.impl.net.tcp.pool.PooledTCPNetSyslogConfig
+import org.productivity.java.syslog4j.impl.net.tcp.TCPNetSyslogConfig
 /**
  * PooledTCPNetSyslog
  * TCPNetSyslog
@@ -16,11 +17,11 @@ object SyslogClient extends App {
     (elapsed, res)
   }
 
-  val config = new PooledTCPNetSyslogConfig()
+  val config = new TCPNetSyslogConfig()//new PooledTCPNetSyslogConfig()
   config.setPort(1234) 
   config.setHost("localhost")
   val instance = Syslog.createInstance("pooledTcp", config);
-  val to = 50000
+  val to = 1000000
   val (elapsed, _) = measure {
     1 to to foreach (i => instance.info(s"$i"))
   }
