@@ -5,14 +5,15 @@ import akka.actor.ActorDSL._
 import java.net.InetSocketAddress
 import akka.util._
 import java.net._
-import java.io._ 
+import java.io._
 import akka.pattern.ask
 import akka.actor.IO._
 import akka.routing.RoundRobinRouter
 import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
 import scala.util.{ Try, Failure, Success }
-import vcmd.io.NonBlockingSocketServer
+import io.NonBlockingSocketServer
+import scala.concurrent.Await
 package object vcmd {
   implicit val timeout: Timeout = 2 seconds
 }
@@ -24,7 +25,7 @@ case object StartConnection
 
 object SyslogListener {
 
-  def processRequest(processor: ActorRef)(socket: IO.SocketHandle): IO.Iteratee[Unit] =
+  def processRequest(processor: ActorRef)(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] =
     IO repeat {
       for {
         bytes <- IO takeUntil ByteString("\n")
@@ -35,28 +36,28 @@ object SyslogListener {
     }
 }
 
-class SyslogProcessor(remoteHost: String, remotePort: Int) extends Actor with ActorLogging {
+class SyslogProcessorActor(remoteHost: String, remotePort: Int) extends Actor with ActorLogging {
   import context.dispatcher
   val riskShieldSender = new RisShieldSender(remoteHost, remotePort)
 
   def receive = {
     case RawMessage(msg) =>
-       val resp = riskShieldSender.send(msg);
-       validateResult(msg)(resp) 
-       //println(resp)
-//      future {
-//        val resp = riskShieldSender.send(msg);
-//        validateResult(msg)(resp) 
-//         
-//      } recover {
-//        case s: SocketTimeoutException => println(s.getMessage())
-//         case s: Exception => println(s.getMessage())
-//      }
-  
+      val resp = riskShieldSender.send(msg);
+      validateResult(msg)(resp)
+    //println(resp)
+    //      future {
+    //        val resp = riskShieldSender.send(msg);
+    //        validateResult(msg)(resp) 
+    //         
+    //      } recover {
+    //        case s: SocketTimeoutException => println(s.getMessage())
+    //         case s: Exception => println(s.getMessage())
+    //      }
+
   }
 
   private def validateResult(in: String)(resp: String) = {
-    //println(resp)
+    println(resp)
     val expected = s"echo: $in"
     val equal = resp == expected
     if (!equal) {
@@ -71,57 +72,41 @@ class SyslogProcessor(remoteHost: String, remotePort: Int) extends Actor with Ac
 }
 
 class RisShieldSender(host: String, port: Int) {
- //val sockaddr = new InetSocketAddress(host, port);
-//  var socket:Option[Socket] = None
-//  private def riscShieldSocket = socket match {
-//    case Some(s) => s
-//    case None => socket = Some(connect)
-//    socket.get
-//  }
-    
-lazy val riscShieldSocket = new Socket(host, port)
+
+  lazy val riscShieldSocket = new Socket(host, port)
   def send(msg: String): String = {
     val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
     val in = new BufferedReader(new InputStreamReader(
       riscShieldSocket.getInputStream(), "utf-8"));
-    out.println(msg );
+    out.println(msg);
     in.readLine()
-  }
-
-  private def connect:Socket = {
-    val socket = new Socket
-    //socket.setSoTimeout(1000)
-    //socket.connect(sockaddr)
-    socket
   }
 
   def disconnect {
     try {
-    
-      if (riscShieldSocket.isConnected()) 
-      riscShieldSocket.close()
+      if (riscShieldSocket.isConnected())
+        riscShieldSocket.close()
     } catch {
-      case e:Exception => println("disconnect failed " + e.getMessage())
+      case e: Exception => println("disconnect failed " + e.getMessage())
     }
-    
-  }
-  def reconnect {
-    if (!riscShieldSocket.isClosed) {
-      riscShieldSocket.close
-    }
-    riscShieldSocket
+
   }
 }
 
 object Collector extends App {
+  implicit val timeout: Timeout = 4 seconds
+
   val syslogListenerPort = 1234
   val riskShieldServerPort = 2345
   val host = "localhost"
   val system = ActorSystem("vcmd")
-  val routees = 1 to 4 map (i => system.actorOf(new Props().withCreator(new SyslogProcessor(host, riskShieldServerPort)), s"actor_$i"))
-  val router = system.actorOf(Props[SyslogProcessor].withRouter(
-    RoundRobinRouter(routees = routees)))
+  implicit val dispatcher = system.dispatcher
+  val supervisor = system.actorOf(Props[RiskShieldProcessorSupervisor])
+  val routeesConfig: Seq[Future[ActorRef]] = for (i <- 1 to 4) yield (supervisor ? new Props().withCreator(new SyslogProcessorActor(host, riskShieldServerPort))).mapTo[ActorRef]
+  val supervisedRoutees: Seq[ActorRef] = Await.result(Future.sequence(routeesConfig), 1.seconds)
+
+  //val routees = 1 to 4 map (i => system.actorOf(new Props().withCreator(new SyslogProcessorActor(host, riskShieldServerPort)), s"actor_$i"))
+  val router = system.actorOf(Props[RiskShieldProcessorSupervisor].withRouter(
+    RoundRobinRouter(routees = supervisedRoutees)))
   val syslogListener = system.actorOf(Props(new NonBlockingSocketServer(syslogListenerPort, SyslogListener.processRequest(router))), "sysloglistener")
-  routees foreach(_ ! StartConnection)
 }
-*/
