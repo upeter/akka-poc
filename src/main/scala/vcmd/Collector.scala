@@ -16,37 +16,103 @@ import io.NonBlockingSocketServer
 import scala.concurrent.Await
 import akka.actor.SupervisorStrategy._
 import akka.dispatch.Terminate
+import config.Settings
 package object vcmd {
   implicit val timeout: Timeout = 2 seconds
 }
 
 case class RawMessage(msg: String)
+case class RetryMessage(msg: String)
+case class SendFailure(actorRef:ActorRef)
 case class RiskShieldTimeout(exMsg: String)
 case object StopConnection
 case object StartConnection
 
 object SyslogListener {
+    val riskShieldSender = new RisShieldSender("localhost", 2345, 2000)
 
-  def processRequest(processor: ActorRef)(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] =
+  def processRequest(processor: ActorRef)(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
+
     IO repeat {
       for {
         bytes <- IO takeUntil ByteString("\n")
       } yield {
         val msg = bytes.decodeString("utf-8")
+        //println(msg)
+//        val resp = riskShieldSender.send(msg)
+//        validateResult(msg)(resp)
         processor ! (RawMessage(msg))
       }
     }
+  }
+
+  private def validateResult(in: String)(resp: String) = {
+
+    val expected = s"echo: $in"
+    val equal = resp == expected
+    if (!equal) {
+      println(s"expected $expected")
+      println(s"received $resp")
+      //assert(equal)
+    }
+    equal
+
+  }
 }
 
-class SyslogProcessorActor(remoteHost: String, remotePort: Int, readTimeout: Int) extends Actor with ActorLogging {
+
+
+class ConnectionControllerActor extends Actor with ActorLogging {
+  
+var stats = Map[String, Seq[Long]]().withDefaultValue(Seq[Long]())
+
+  def receive:Receive = {
+    case SendFailure(actorRef) => //stats += actorRef.path -> (stats("actor1") :+ 3l)
+  }
+}
+
+
+class SyslogProcessorActor extends Actor with ActorLogging with Stash {
   import context.dispatcher
-  val riskShieldSender = new RisShieldSender(remoteHost, remotePort, readTimeout)
+   val settings = Settings(context.system)
+   import settings._
+  val riskShieldSender = new RisShieldSender(riskShieldServerHost, riskShieldServerPort, riskShieldServerReadTimeout)
+ 
+  
+  def initializing:Receive = {
+    case RawMessage(msg) => 
+  }
+
+  
+    def reconnect:Receive = {
+    case RetryMessage(msg) => {
+      if(false) {
+        //retry failed:
+        //schedule new retry
+      } else {
+        //retry successful:
+        unstashAll
+        //notify connection controller
+        //become receive mode
+      }
+      
+    }
+    case RawMessage(msg) => stash
+  }
 
   def receive = {
     case RawMessage(msg) =>
       //println(msg)
       val resp = riskShieldSender.send(msg);
       validateResult(msg)(resp)
+      if(false) {
+        //send Failed to connection controler
+        //schedule retry with current message
+        //become reconnect mode 
+      } else {
+        //forward to file writer actor
+      }
+      
     //println(resp)
     //      future {
     //        val resp = riskShieldSender.send(msg);
@@ -123,7 +189,7 @@ object SupervisorStrategy {
 }
 
 class SyslogProcessorMasterActor(props: Props) extends Actor with ActorLogging {
-  import context.dispatcher
+import context.dispatcher
   def initWorkers = {
     val router = context.system.actorOf(props.withRouter(RoundRobinRouter(20, supervisorStrategy = OneForOneStrategy(maxNrOfRetries = 2) {
       case e => println(s"====> exception: ${e.getClass.getName} messsage ${e.getMessage}"); Restart
@@ -148,14 +214,12 @@ class SyslogProcessorMasterActor(props: Props) extends Actor with ActorLogging {
 
 object Collector extends App {
   implicit val timeout: Timeout = 4 seconds
-  val readTimeout = 1000
-  val syslogListenerPort = 1234
-  val riskShieldServerPort = 2345
-  val host = "localhost"
   val system = ActorSystem("vcmd")
+  val settings = Settings(system)
+  import settings._
   implicit val dispatcher = system.dispatcher
-  val router = system.actorOf(Props(new SyslogProcessorMasterActor(new Props().withCreator(new SyslogProcessorActor(host, riskShieldServerPort, readTimeout)))))
- 
+  val router = system.actorOf(Props(new SyslogProcessorMasterActor( Props[SyslogProcessorActor])))
+println(settings.riskShieldServerConnectTimeout)
   val syslogListener = system.actorOf(Props(new NonBlockingSocketServer(syslogListenerPort, SyslogListener.processRequest(router))), "sysloglistener")
 }
 
@@ -179,3 +243,4 @@ object Collector extends App {
   //    })), name = "router")
 * 
 *  */
+

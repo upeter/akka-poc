@@ -10,7 +10,7 @@ import java.net.InetSocketAddress
 import SyslogClient._
 object SocketTest extends App {
 
-    val to = 1000000
+    val to = 500000
     val tester = new Tester
   val (elapsed, _) = measure {
     1 to to foreach (i => tester.log(s"$i"))
@@ -53,6 +53,7 @@ class Tester {
     def log(msg: String): Unit = {
       val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
       out.println(msg)
+      out.flush
     }
 
   def test() {
