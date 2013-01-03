@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit
 
 class SettingsImpl(config: Config) extends Extension {
   val syslogListenerPort: Int = config.getInt("vcmd.syslog.listener.port")
+  val adminPort: Int = config.getInt("vcmd.admin.port")
   val riskShieldServerPort: Int =
     config.getInt("vcmd.risk.shield.server.port")
   val riskShieldServerHost: String =

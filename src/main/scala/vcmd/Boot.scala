@@ -16,14 +16,20 @@ import scala.concurrent.Await
 import akka.actor.SupervisorStrategy._
 import akka.dispatch.Terminate
 import config.Settings
-object Boot  extends App {
+import io._
+object Boot extends App {
   implicit val timeout: Timeout = 4 seconds
   val system = ActorSystem("vcmd")
   val settings = Settings(system)
   import settings._
   implicit val dispatcher = system.dispatcher
+
   val router = system.actorOf(Props(new SyslogProcessorMasterActor(Props[RiskShieldSenderActor])))
-  val syslogListener = system.actorOf(Props(new NonBlockingSocketServer(syslogListenerPort, SyslogListener.processRequest(router))), "sysloglistener")
+  // val syslogListener = system.actorOf(Props(new NonBlockingSocketServer(syslogListenerPort, SyslogListener.processRequest(router))), "sysloglistener")
+
+  val workerFactory = (socket: Socket) => new WorkerImpl(socket, SyslogDispatcher.processRequest(router))
+
+  system.actorOf(Props(new BlockingSyslogListenerActor(new BlockingSocketServer(syslogListenerPort, workerFactory))))
 }
 
 /*

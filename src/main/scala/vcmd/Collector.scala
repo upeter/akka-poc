@@ -64,6 +64,15 @@ object SyslogListener {
 
 }
 
+object SyslogDispatcher {
+
+  def processRequest(processor: ActorRef)(msg: String) = {
+    //println(s"processing line $msg")
+    processor ! (RawMessage(msg))
+  }
+
+}
+
 class ConnectionControllerActor extends Actor with ActorLogging {
 
   var stats = Map[String, Seq[Long]]().withDefaultValue(Seq[Long]())

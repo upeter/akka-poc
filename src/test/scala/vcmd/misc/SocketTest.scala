@@ -9,12 +9,16 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import SyslogClient._
 object SocketTest extends App {
-
+try {
     val to = 500000
     val tester = new Tester
   val (elapsed, _) = measure {
     1 to to foreach (i => tester.log(s"$i"))
   }
+} catch {
+  case e => e.printStackTrace()
+}
+    
   println(s"===========================================>total sent: $to, elapsed $elapsed ms, tps ${to / elapsed * 1000}")
 
  // (1 to 5).map(i => new Tester).foreach(_.test)
@@ -51,7 +55,8 @@ class Tester {
   }
   
     def log(msg: String): Unit = {
-        Thread.sleep(1000)
+        //Thread.sleep(1000)
+        //println(msg)
       val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
       out.println(msg)
       out.flush

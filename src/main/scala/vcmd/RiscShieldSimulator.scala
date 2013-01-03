@@ -32,7 +32,7 @@ var start = 0l
             ref ! "startup"
           }
         } else {
-          println(s"receive $input")
+          //println(s"receive $input")
           try {
             val i = input.toInt
             if (i == 1) {
