@@ -17,20 +17,36 @@ import scala.concurrent.Await
 import akka.actor.SupervisorStrategy._
 import akka.dispatch.Terminate
 import config.Settings
+
 package object vcmd {
   implicit val timeout: Timeout = 2 seconds
+
+  def validateResult(in: String)(resp: String) = {
+
+    val expected = s"echo: $in"
+    val equal = expected.startsWith(resp)
+    if (!equal) {
+      println(s"expected $expected ${expected.size}")
+      println(s"received $resp ${resp.size}")
+      //assert(equal)
+    }
+    equal
+
+  }
 }
 
-case class RawMessage(msg: String)
-case class RetryMessage(msg: String)
-case class SendFailure(actorRef:ActorRef)
+sealed trait Message { def msg: String }
+case class RawMessage(msg: String) extends Message
+case class InitMessage(msg: String, meta: String) extends Message
+//case class RetryMessage(msg: Message)
+case class SendFailure(actorRef: ActorRef)
 case class RiskShieldTimeout(exMsg: String)
 case object StopConnection
 case object StartConnection
 
 object SyslogListener {
-    val riskShieldSender = new RisShieldSender("localhost", 2345, 2000)
-
+  val riskShieldSender = new RiskShieldSender("localhost", 2345, 2000)
+  import scala.concurrent.ExecutionContext.Implicits.global
   def processRequest(processor: ActorRef)(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
 
     IO repeat {
@@ -39,110 +55,126 @@ object SyslogListener {
       } yield {
         val msg = bytes.decodeString("utf-8")
         //println(msg)
-//        val resp = riskShieldSender.send(msg)
-//        validateResult(msg)(resp)
+        //        val resp = riskShieldSender.send(msg)
+        //        validateResult(msg)(resp)
         processor ! (RawMessage(msg))
       }
     }
   }
 
-  private def validateResult(in: String)(resp: String) = {
-
-    val expected = s"echo: $in"
-    val equal = resp == expected
-    if (!equal) {
-      println(s"expected $expected")
-      println(s"received $resp")
-      //assert(equal)
-    }
-    equal
-
-  }
 }
 
-
-
 class ConnectionControllerActor extends Actor with ActorLogging {
-  
-var stats = Map[String, Seq[Long]]().withDefaultValue(Seq[Long]())
 
-  def receive:Receive = {
+  var stats = Map[String, Seq[Long]]().withDefaultValue(Seq[Long]())
+
+  def receive: Receive = {
     case SendFailure(actorRef) => //stats += actorRef.path -> (stats("actor1") :+ 3l)
   }
 }
-
-
-class SyslogProcessorActor extends Actor with ActorLogging with Stash {
+import vcmd._
+class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
   import context.dispatcher
-   val settings = Settings(context.system)
-   import settings._
-  val riskShieldSender = new RisShieldSender(riskShieldServerHost, riskShieldServerPort, riskShieldServerReadTimeout)
- 
-  
-  def initializing:Receive = {
-    case RawMessage(msg) => 
-  }
 
-  
-    def reconnect:Receive = {
-    case RetryMessage(msg) => {
-      if(false) {
-        //retry failed:
-        //schedule new retry
-      } else {
-        //retry successful:
-        unstashAll
-        //notify connection controller
-        //become receive mode
-      }
-      
-    }
-    case RawMessage(msg) => stash
-  }
+  val settings = Settings(context.system)
+  import settings._
+  val scheduler = context.system.scheduler
+  var riskShieldSender = initSender
 
-  def receive = {
+  private def initSender = new RiskShieldSender(riskShieldServerHost, riskShieldServerPort, riskShieldServerReadTimeout)
+
+  context.become(initializing)
+
+  def initializing: Receive = {
     case RawMessage(msg) =>
-      //println(msg)
-      val resp = riskShieldSender.send(msg);
-      validateResult(msg)(resp)
-      if(false) {
-        //send Failed to connection controler
-        //schedule retry with current message
-        //become reconnect mode 
-      } else {
-        //forward to file writer actor
-      }
-      
-    //println(resp)
-    //      future {
-    //        val resp = riskShieldSender.send(msg);
-    //        validateResult(msg)(resp) 
-    //         
-    //      } recover {
-    //        case s: SocketTimeoutException => println(s.getMessage())
-    //         case s: Exception => println(s.getMessage())
-    //      }
+      log.debug("send init message...")
+      //lookup metadata in cache
+      send(InitMessage(msg, "Metadata"), onSuccess = (req, resp) => {
+        log.debug("init sent: -> validate...")
+        //TODO: handle invalid return messages
+        if (validateResult(req)(resp)) {
+          log.debug("init ok: -> become receive")
+          context.become(receive)
+        }
+      })
+  }
+  def receive = {
+    case msg @ RawMessage(_) => send(msg)
 
   }
 
-  private def validateResult(in: String)(resp: String) = {
-
-    val expected = s"echo: $in"
-    val equal = resp == expected
-    if (!equal) {
-      println(s"expected $expected")
-      println(s"received $resp")
-      //assert(equal)
+  def reconnect: Receive = {
+    case msg: InitMessage => {
+      log.debug(s"retry message=[${msg}]...")
+      send(msg, onSuccess = (req, resp) => {
+        //TODO: handle invalid return messages
+        if (validateResult(req)(resp)) {
+          log.debug("retry ok: unstashAll -> become receive")
+          unstashAll
+          context.become(receive)
+        }
+      })
     }
-    equal
+    case message => stash
+  }
 
+  private def doSend(msg: String): Try[String] = {
+    val result = Try(riskShieldSender.send(msg))
+    if (result.isFailure) {
+      val Failure(e) = result
+      val reason = s"${e.getClass().getSimpleName()} occured ${e.getMessage()}. Close connection."
+      log.error(reason)
+      riskShieldSender.disconnect
+      riskShieldSender = initSender
+    }
+    result
+  }
+
+  private def handleFailureDefault(msg: InitMessage) = {
+    log.error(s"Failure occured. Schedule retry in ${riskShieldRetryInterval} millis.")
+    scheduler.scheduleOnce(riskShieldRetryInterval milliseconds) {
+      self ! msg
+    }
+    log.debug("send failed: -> become reconnect")
+    context.become(reconnect)
+  }
+
+  private def handleSuccessDefault(req: String, resp: String): Unit = {
+    validateResult(req)(resp)
+  }
+
+  private def send(msg: Message, onSuccess: (String, String) => Unit = handleSuccessDefault, onFailure: InitMessage => Unit = handleFailureDefault) = {
+    msg match {
+      case raw @ RawMessage(msg) =>
+        val res = doSend(msg)
+        handleResult(res, InitMessage(msg, "Metadata"))
+      case init @ InitMessage(msg, meta) => {
+        val res = for {
+          metaResp <- doSend(meta)
+          if validateResult(meta)(metaResp)
+          resp <- doSend(msg)
+          if validateResult(msg)(resp)
+        } yield resp
+        handleResult(res, init)
+
+      }
+      case unkown => throw new IllegalStateException(s"Invalid message type: ${unkown.getClass().getName()}")
+
+    }
+    def handleResult(res: Try[String], reqMsg: InitMessage) = {
+      res match {
+        //TODO: handle invalid return messages
+        case Success(resp) => onSuccess(reqMsg.msg, resp)
+        case Failure(e) => onFailure(reqMsg)
+      }
+    }
   }
 
 }
 
-class RisShieldSender(host: String, port: Int, readTimeout: Int) {
+class RiskShieldSender(host: String, port: Int, readTimeout: Int) {
 
-  lazy val riscShieldSocket = {
+  lazy val riskShieldSocket = {
     val adr = new InetSocketAddress(host, port)
     val socket = new Socket()
     socket.setSoTimeout(readTimeout)
@@ -150,20 +182,22 @@ class RisShieldSender(host: String, port: Int, readTimeout: Int) {
     socket
   }
   def send(msg: String): String = {
-    val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
+    val out = new PrintWriter(new OutputStreamWriter(riskShieldSocket.getOutputStream(), "utf-8"), true);
     val in = new BufferedReader(new InputStreamReader(
-      riscShieldSocket.getInputStream(), "utf-8"));
+      riskShieldSocket.getInputStream(), "utf-8"));
     out.println(msg)
     Option(in.readLine()) match {
       case Some(resp) => resp
-      case None => throw new SocketReadException
+      case None =>
+        throw new SocketReadException("No response received")
     }
+
   }
 
   def disconnect {
     try {
-      if (riscShieldSocket.isConnected())
-        riscShieldSocket.close()
+      if (riskShieldSocket.isConnected())
+        riskShieldSocket.close()
     } catch {
       case e: Exception => println("disconnect failed " + e.getMessage())
     }
@@ -171,7 +205,7 @@ class RisShieldSender(host: String, port: Int, readTimeout: Int) {
   }
 }
 
-class SocketReadException extends Exception
+class SocketReadException(msg: String) extends Exception(msg)
 
 object SupervisorStrategy {
   val supervisorStrategy =
@@ -189,7 +223,7 @@ object SupervisorStrategy {
 }
 
 class SyslogProcessorMasterActor(props: Props) extends Actor with ActorLogging {
-import context.dispatcher
+  import context.dispatcher
   def initWorkers = {
     val router = context.system.actorOf(props.withRouter(RoundRobinRouter(20, supervisorStrategy = OneForOneStrategy(maxNrOfRetries = 2) {
       case e => println(s"====> exception: ${e.getClass.getName} messsage ${e.getMessage}"); Restart
@@ -211,36 +245,4 @@ import context.dispatcher
     case a => router forward a
   }
 }
-
-object Collector extends App {
-  implicit val timeout: Timeout = 4 seconds
-  val system = ActorSystem("vcmd")
-  val settings = Settings(system)
-  import settings._
-  implicit val dispatcher = system.dispatcher
-  val router = system.actorOf(Props(new SyslogProcessorMasterActor( Props[SyslogProcessorActor])))
-println(settings.riskShieldServerConnectTimeout)
-  val syslogListener = system.actorOf(Props(new NonBlockingSocketServer(syslogListenerPort, SyslogListener.processRequest(router))), "sysloglistener")
-}
-
-/*
- *  router with supervised children
-  val supervisor = system.actorOf(Props[RiskShieldProcessorSupervisor])
-  val routeesConfig: Seq[Future[ActorRef]] = for (i <- 1 to 1) yield (supervisor ? new Props().withCreator(new SyslogProcessorActor(host, riskShieldServerPort, readTimeout))).mapTo[ActorRef]
-  val supervisedRoutees: Seq[ActorRef] = Await.result(Future.sequence(routeesConfig), 1.seconds)
-  val router = system.actorOf(Props[RiskShieldProcessorSupervisor].withRouter(
-    RoundRobinRouter(routees = supervisedRoutees)))
-
-	* router that is supervisor
-  val routees:Seq[ActorRef] = 1 to 1 map (i => system.actorOf(new Props().withCreator(new SyslogProcessorActor(host, riskShieldServerPort, readTimeout)), s"actor_$i"))
-  val router = system.actorOf(Props[RiskShieldProcessorSupervisor].withRouter(
-    RoundRobinRouter(routees = routees.map(_.path.toString), supervisorStrategy = SupervisorStrategy.supervisorStrategy)))
-
-* inline router 
- //  val router = system.actorOf(new Props().withCreator(new SyslogProcessorActor(host, riskShieldServerPort, readTimeout))
-  //    .withRouter(RoundRobinRouter(1, supervisorStrategy = OneForOneStrategy(maxNrOfRetries = 2) {
-  //      case e => println(s"====> exception: ${e.getClass.getName} messsage ${e.getMessage}"); Restart
-  //    })), name = "router")
-* 
-*  */
 

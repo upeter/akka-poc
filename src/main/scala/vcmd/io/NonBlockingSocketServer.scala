@@ -21,7 +21,7 @@ class NonBlockingSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRe
       val socket = server.accept()
       println(s"Accept $socket")
       state(socket) flatMap (_ => inputHandler(socket, self, scheduler))
-    case IO.Read(socket, bytes) =>
+    case IO.Read(socket, bytes)  => 
       state(socket)(IO Chunk bytes)
     case IO.Closed(socket, cause) =>
       println(s"Closing $socket")

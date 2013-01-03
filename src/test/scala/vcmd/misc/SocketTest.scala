@@ -51,6 +51,7 @@ class Tester {
   }
   
     def log(msg: String): Unit = {
+        Thread.sleep(1000)
       val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
       out.println(msg)
       out.flush

@@ -25,13 +25,6 @@ var start = 0l
       } yield {
         val input = bytes.utf8String
 
-        //        if (counter == 0) {
-        //          startTime = System.currentTimeMillis
-        //        }
-        //        counter += 1
-        //        if (counter % 100 == 0) {
-        //          println(s"count: $counter elapsed ${System.currentTimeMillis - startTime}")
-        //        }
 
         if (input.startsWith("stop")) {
           ref ! "shutdown"
@@ -39,6 +32,7 @@ var start = 0l
             ref ! "startup"
           }
         } else {
+          println(s"receive $input")
           try {
             val i = input.toInt
             if (i == 1) {

@@ -14,9 +14,11 @@ class SettingsImpl(config: Config) extends Extension {
   val riskShieldServerHost: String =
     config.getString("vcmd.risk.shield.server.host")
   val riskShieldServerConnectTimeout: Int =
-    config.getInt("vcmd.risk.shield.server.connect.timeout")
+    config.getInt("vcmd.risk.shield.server.connect.timeout.ms")
   val riskShieldServerReadTimeout: Int =
-    config.getInt("vcmd.risk.shield.server.read.timeout")
+    config.getInt("vcmd.risk.shield.server.read.timeout.ms")
+  val riskShieldRetryInterval: Int =
+    config.getInt("vcmd.risk.shield.server.retry.interval.ms")
 
 }
 object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {
