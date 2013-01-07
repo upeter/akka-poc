@@ -20,6 +20,10 @@ class SettingsImpl(config: Config) extends Extension {
     config.getInt("vcmd.risk.shield.server.read.timeout.ms")
   val riskShieldRetryInterval: Int =
     config.getInt("vcmd.risk.shield.server.retry.interval.ms")
+  val highWatermarkMessageCount: Int =
+    config.getInt("vcmd.watermark.high")
+  val lowWatermarkMessageCount: Int =
+    config.getInt("vcmd.watermark.low")
 
 }
 object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {

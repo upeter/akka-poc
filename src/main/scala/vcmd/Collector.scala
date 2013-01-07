@@ -12,7 +12,7 @@ import akka.routing.RoundRobinRouter
 import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
 import scala.util.{ Try, Failure, Success }
-import io.NonBlockingSocketServer
+import io.NIOSocketServer
 import scala.concurrent.Await
 import akka.actor.SupervisorStrategy._
 import akka.dispatch.Terminate
@@ -38,11 +38,10 @@ package object vcmd {
 sealed trait Message { def msg: String }
 case class RawMessage(msg: String) extends Message
 case class InitMessage(msg: String, meta: String) extends Message
-//case class RetryMessage(msg: Message)
-case class SendFailure(actorRef: ActorRef)
-case class RiskShieldTimeout(exMsg: String)
-case object StopConnection
-case object StartConnection
+case class MessageSent(msg: Message)
+
+case object HaltConnections
+case object ResumeConnections
 
 object SyslogListener {
   val riskShieldSender = new RiskShieldSender("localhost", 2345, 2000)
@@ -73,13 +72,37 @@ object SyslogDispatcher {
 
 }
 
-class ConnectionControllerActor extends Actor with ActorLogging {
+class ThrottlerActor(socketServerActor: ActorRef) extends Actor with ActorLogging {
 
-  var stats = Map[String, Seq[Long]]().withDefaultValue(Seq[Long]())
+  private val settings = Settings(context.system)
+  import settings._
+  private var messagesInProgres: BigInt = 0
 
+  private def incrementCount() = messagesInProgres += 1 
+  private def decrementCount() = messagesInProgres -= 1
+  
   def receive: Receive = {
-    case SendFailure(actorRef) => //stats += actorRef.path -> (stats("actor1") :+ 3l)
+    case m: Message =>
+    	incrementCount()
+      if (highWatermarkMessageCount > messagesInProgres) {
+        log.info(s"Exceeded high watermark of $highWatermarkMessageCount messsages. Halt connections ...")
+        socketServerActor ! HaltConnections
+        context.become(highWatermarkExceeded)
+      }
+    case m: MessageSent => decrementCount()
   }
+
+  def highWatermarkExceeded: Receive = {
+    case m: Message => incrementCount()
+    case m: MessageSent =>
+      decrementCount()
+      if (lowWatermarkMessageCount < messagesInProgres) {
+       log.info(s"Low watermark of $lowWatermarkMessageCount messages reached. Resume connections.")
+        socketServerActor ! ResumeConnections
+        context.unbecome
+      }
+  }
+
 }
 import vcmd._
 class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
@@ -97,7 +120,7 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
   def initializing: Receive = {
     case RawMessage(msg) =>
       log.debug("send init message...")
-      //lookup metadata in cache
+      //TODO: lookup metadata in cache
       send(InitMessage(msg, "Metadata"), onSuccess = (req, resp) => {
         log.debug("init sent: -> validate...")
         //TODO: handle invalid return messages
@@ -243,13 +266,11 @@ class SyslogProcessorMasterActor(props: Props) extends Actor with ActorLogging {
   var router = initWorkers
 
   def receive = {
-
     case Terminated(routerRef) =>
       println("Terminated")
       context.system.scheduler.scheduleOnce(5 seconds) {
         println("Restarting")
         router = initWorkers
-
       }
     case a => router forward a
   }

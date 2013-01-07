@@ -2,7 +2,7 @@ package vcmd
 
 import akka.actor.ActorLogging
 import akka.actor.Actor
-import io.BlockingSocketServer
+import io.HaltableSocketServer
 import scala.concurrent.ExecutionContext.Implicits.global
 
 import akka.actor._
@@ -13,7 +13,7 @@ import java.net._
 import java.io._
 import akka.actor.IO._
 import scala.concurrent.duration._
-class BlockingSyslogListenerActor(socketServer : => BlockingSocketServer) extends Actor with ActorLogging {
+class VcmdAdminServerActor(socketServer : => HaltableSocketServer) extends Actor with ActorLogging {
 
   val settings = config.Settings(context.system)
   import settings._
@@ -29,7 +29,7 @@ class BlockingSyslogListenerActor(socketServer : => BlockingSocketServer) extend
   override def postStop {
     vcmdServer.stop
   }
-
+ 
   def receive: Receive = {
     case IO.NewClient(server) =>
       val socket = server.accept()
@@ -41,6 +41,8 @@ class BlockingSyslogListenerActor(socketServer : => BlockingSocketServer) extend
       println(s"Closing $socket")
       adminConnections(socket)(IO.EOF)
       adminConnections -= socket
+    case HaltConnections => vcmdServer.haltConnections
+    case ResumeConnections => vcmdServer.resumeConnections
   }
 
   def processAdminRequest(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
@@ -60,17 +62,11 @@ class BlockingSyslogListenerActor(socketServer : => BlockingSocketServer) extend
     }
     cmd match {
       case "mute" =>
-        vcmdServer.connections.foreach(_.halt)
+        vcmdServer.haltConnections
         write("mute done")
-      case "mute-first" =>
-        vcmdServer.connections.head.halt
-        write("mute first done")
       case "resume" =>
-        vcmdServer.connections.foreach(_.resume)
+        vcmdServer.resumeConnections
         write("resume done")
-      case "resume-first" =>
-        vcmdServer.connections.head.resume
-        write("resume first done")
       case none => write(s"unkown command: $none")
     }
   }

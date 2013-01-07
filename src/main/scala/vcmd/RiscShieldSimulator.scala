@@ -11,7 +11,7 @@ import akka.actor.IO._
 import akka.routing.RoundRobinRouter
 import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
-import io.NonBlockingSocketServer
+import io.NIOSocketServer
 
 object RiscShieldServer {
   import scala.concurrent.ExecutionContext.Implicits.global
@@ -60,7 +60,7 @@ object RiscShieldSimulator extends App {
   val riskShieldServerPort = 2345
   val host = "localhost"
   val system = ActorSystem("risk-shield")
-  system.actorOf(Props(new NonBlockingSocketServer(riskShieldServerPort, RiscShieldServer.processRequest)), "riskShieldlistener")
+  system.actorOf(Props(new NIOSocketServer(riskShieldServerPort, RiscShieldServer.processRequest)), "riskShieldlistener")
 }
 
 

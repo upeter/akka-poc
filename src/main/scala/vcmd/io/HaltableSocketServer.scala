@@ -8,10 +8,10 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import scala.concurrent.ExecutionContext
 
-class BlockingSocketServer(port: Int, workerFactory:Socket => Worker)(implicit executer: ExecutionContext) extends Runnable {
+class HaltableSocketServer(port: Int, workerFactory:Socket => Worker)(implicit executer: ExecutionContext) extends Runnable {
   @volatile
   var stopped = false
-  var connections: Vector[Worker] = Vector()
+  private var connections: Vector[Worker] = Vector()
 
   lazy val serverSocket = new ServerSocket(port)
 
@@ -21,6 +21,7 @@ class BlockingSocketServer(port: Int, workerFactory:Socket => Worker)(implicit e
         val clientSocket = serverSocket.accept();
         val worker = workerFactory(clientSocket)
         executer.execute(worker)
+        removeClosedConections
         connections = connections :+ worker
       } catch {
         case e: IOException =>
@@ -38,17 +39,27 @@ class BlockingSocketServer(port: Int, workerFactory:Socket => Worker)(implicit e
     connections.foreach(_.close)
 
   }
+  
+  def haltConnections = connections.foreach(_.halt)
+  def resumeConnections =  connections.foreach(_.resume)
+  protected def removeClosedConections = {
+    connections = connections filterNot(_.closed)  
+  } 
+
 
 }
+
 
 
 trait Worker extends Runnable {
-  def halt()
-  def resume()
-  def close()
+  def halt():Unit
+  def resume():Unit
+  def close():Unit
+  def closed:Boolean
   
   
 }
+
 
 class WorkerImpl(clientSocket: Socket, handleLine:String => Any) extends Worker with Runnable {
 
@@ -65,8 +76,10 @@ class WorkerImpl(clientSocket: Socket, handleLine:String => Any) extends Worker 
     mute = true;
   }
 
+  def closed = clientSocket.isClosed
+  
   def close() {
-    if (!clientSocket.isClosed()) {
+    if (!clientSocket.isClosed) {
       clientSocket.close();
     }
   }

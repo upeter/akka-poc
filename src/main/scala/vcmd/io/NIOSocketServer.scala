@@ -9,7 +9,7 @@ import java.io._
 import akka.actor.IO._
 import scala.concurrent.duration._
 
-class NonBlockingSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Scheduler) => IO.Iteratee[Unit]) extends Actor {
+class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Scheduler) => IO.Iteratee[Unit]) extends Actor {
   val state = IO.IterateeRef.Map.async[IO.Handle]()(context.dispatcher)
   var serverHanlde: Option[ServerHandle] = None
   val scheduler = context.system.scheduler

@@ -11,7 +11,7 @@ import akka.routing.RoundRobinRouter
 import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
 import scala.util.{ Try, Failure, Success }
-import io.NonBlockingSocketServer
+import io.NIOSocketServer
 import scala.concurrent.Await
 import akka.actor.SupervisorStrategy._
 import akka.dispatch.Terminate
@@ -29,7 +29,11 @@ object Boot extends App {
 
   val workerFactory = (socket: Socket) => new WorkerImpl(socket, SyslogDispatcher.processRequest(router))
 
-  system.actorOf(Props(new BlockingSyslogListenerActor(new BlockingSocketServer(syslogListenerPort, workerFactory))))
+  val adminServer = system.actorOf(Props(new VcmdAdminServerActor(new HaltableSocketServer(syslogListenerPort, workerFactory))))
+
+  val throttlerActor = system.actorOf(Props(new ThrottlerActor(adminServer)))
+
+
 }
 
 /*
