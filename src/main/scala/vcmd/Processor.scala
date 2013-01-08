@@ -181,7 +181,7 @@ class SocketReadException(msg: String) extends Exception(msg)
 class RiskShieldSenderMasterActor(props: Props) extends Actor with ActorLogging {
   import context.dispatcher
   def initWorkers = {
-    val router = context.system.actorOf(props.withRouter(RoundRobinRouter(20, supervisorStrategy = OneForOneStrategy(maxNrOfRetries = 2) {
+    val router = context.system.actorOf(props.withRouter(RoundRobinRouter(30, supervisorStrategy = OneForOneStrategy(maxNrOfRetries = 2) {
       case e => log.error(s"====> exception: ${e.getClass.getName} messsage ${e.getMessage}"); Restart
     })), name = "router")
     context.watch(router)

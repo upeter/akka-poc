@@ -9,7 +9,7 @@ import java.net.InetSocketAddress
 import SyslogClient._
 object SocketTest extends App {
 try {
-    val to = 1000000
+    val to = 500000
     val tester = new Tester
   val (elapsed, _) = measure {
     1 to to foreach (i => tester.log(s"$i"))
