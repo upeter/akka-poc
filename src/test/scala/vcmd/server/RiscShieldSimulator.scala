@@ -1,17 +1,15 @@
-package vcmd
+package vcmd.server
 
 import akka.actor._
 import akka.actor.ActorDSL._
-import java.net.InetSocketAddress
 import akka.util._
 import java.net._
 import java.io._
-import akka.pattern.ask
 import akka.actor.IO._
-import akka.routing.RoundRobinRouter
-import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
-import io._
+import vcmd.io._
+import scala.concurrent.ExecutionContext.Implicits.global
+import vcmd._
 
 object RiscShieldServer {
   import scala.concurrent.ExecutionContext.Implicits.global

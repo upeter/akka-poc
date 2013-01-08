@@ -35,84 +35,6 @@ package object vcmd {
   }
 }
 
-sealed trait Message { def msg: String }
-case class RawMessage(msg: String) extends Message
-case class InitMessage(msg: String, meta: String) extends Message
-case class MessageReceived
-case class MessageSent
-
-object SyslogListener {
-  val riskShieldSender = new RiskShieldSender("localhost", 2345, 2000)
-  import scala.concurrent.ExecutionContext.Implicits.global
-  def processRequest(processor: ActorRef, system: ActorSystem)(socket: IO.SocketHandle, self: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
-
-    IO repeat {
-      for {
-        bytes <- IO takeUntil ByteString("\n")
-      } yield {
-        val msg = bytes.decodeString("utf-8")
-        //println(msg)
-        //        val resp = riskShieldSender.send(msg)
-        //        validateResult(msg)(resp)
-        processor ! (RawMessage(msg))
-        system.eventStream.publish(MessageReceived())
-      }
-    }
-  }
-
-}
-
-object SyslogDispatcher {
-
-  def processRequest(processor: ActorRef)(msg: String) = {
-    //println(s"processing line $msg")
-    processor ! (RawMessage(msg))
-  }
-
-}
-
-class ThrottlerActor(socketServerActor: ActorRef) extends Actor with ActorLogging {
-
-  private val settings = Settings(context.system)
-  import settings._
-  private var messagesInProgres: BigInt = 0
-
-  listenTo(classOf[MessageReceived], classOf[MessageSent], classOf[DeadLetter])
-
-  def receive: Receive = deadLetter orElse {
-    case m: MessageReceived =>
-      incrementCount()
-      if (messagesInProgres > highWatermarkMessageCount) {
-        log.info(s"Exceeded high watermark of $highWatermarkMessageCount messsages. Halt connections ...")
-        socketServerActor ! StopListening
-        context.become(highWatermarkExceeded)
-      }
-    case m: MessageSent => decrementCount()
-  }
-
-  def highWatermarkExceeded: Receive = deadLetter orElse {
-    case m: MessageReceived => incrementCount()
-    case m: MessageSent =>
-      decrementCount()
-      if (messagesInProgres < lowWatermarkMessageCount) {
-        log.info(s"Low watermark of $lowWatermarkMessageCount messages reached. Resume connections.")
-        socketServerActor ! RestartListening
-        context.unbecome
-      }
-  }
-
-  private def deadLetter: Receive = {
-    case d: DeadLetter =>
-      decrementCount()
-      log.error(s"Message could not be processed ${d.message}")
-  }
-  private def incrementCount() = messagesInProgres += 1
-  private def decrementCount() = messagesInProgres -= 1
-  private def listenTo(events: Class[_]*) = events foreach { c =>
-    context.system.eventStream.subscribe(self, c)
-  }
-
-}
 import vcmd._
 class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
   import context.dispatcher
@@ -160,9 +82,9 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
   }
 
   //******************************************
-    //Private helper methods
+  //Private helper methods
   //******************************************
-  
+
   private def doSend(msg: String): Try[String] = {
     val result = Try(riskShieldSender.send(msg))
     if (result.isFailure) {
@@ -256,26 +178,11 @@ class RiskShieldSender(host: String, port: Int, readTimeout: Int) {
 
 class SocketReadException(msg: String) extends Exception(msg)
 
-object SupervisorStrategy {
-  val supervisorStrategy =
-    OneForOneStrategy(maxNrOfRetries = 3,
-      withinTimeRange = 1 minute) {
-        //case _: NullPointerException => Restart/Stop/Resume
-        case _: SocketException => Stop
-        case _: SocketTimeoutException => Stop
-        case _: SocketReadException =>
-          println("socket read ex"); Stop
-        case _: ConnectException =>
-          println("socket conn ex"); Stop
-        case e => println("unkown:" + e.getMessage); Stop
-      }
-}
-
-class SyslogProcessorMasterActor(props: Props) extends Actor with ActorLogging {
+class RiskShieldSenderMasterActor(props: Props) extends Actor with ActorLogging {
   import context.dispatcher
   def initWorkers = {
     val router = context.system.actorOf(props.withRouter(RoundRobinRouter(20, supervisorStrategy = OneForOneStrategy(maxNrOfRetries = 2) {
-      case e => println(s"====> exception: ${e.getClass.getName} messsage ${e.getMessage}"); Restart
+      case e => log.error(s"====> exception: ${e.getClass.getName} messsage ${e.getMessage}"); Restart
     })), name = "router")
     context.watch(router)
     router
@@ -284,12 +191,14 @@ class SyslogProcessorMasterActor(props: Props) extends Actor with ActorLogging {
 
   def receive = {
     case Terminated(routerRef) =>
-      println("Terminated")
+      //TODO: handle termination of router (should not happen)
+      log.error(s"Actor $routerRef was terminated. Restart in 5 seconds")
       context.system.scheduler.scheduleOnce(5 seconds) {
-        println("Restarting")
+        log.info("Restart router")
         router = initWorkers
       }
-    case a => router forward a
+    case message => router forward message
   }
 }
+
 

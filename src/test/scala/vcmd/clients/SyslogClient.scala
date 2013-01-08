@@ -1,7 +1,6 @@
-package vcmd.misc
+package vcmd.clients
 
 import org.productivity.java.syslog4j._
-import org.productivity.java.syslog4j.impl.net.tcp.pool.PooledTCPNetSyslogConfig
 import org.productivity.java.syslog4j.impl.net.tcp.TCPNetSyslogConfig
 /**
  * PooledTCPNetSyslog
