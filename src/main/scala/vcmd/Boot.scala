@@ -25,13 +25,13 @@ object Boot extends App {
   implicit val dispatcher = system.dispatcher
 
   val router = system.actorOf(Props(new SyslogProcessorMasterActor(Props[RiskShieldSenderActor])))
-  // val syslogListener = system.actorOf(Props(new NonBlockingSocketServer(syslogListenerPort, SyslogListener.processRequest(router))), "sysloglistener")
+  val syslogListener = system.actorOf(Props(new NIOSocketServer(syslogListenerPort, SyslogListener.processRequest(router, system))), "sysloglistener")
 
   val workerFactory = (socket: Socket) => new WorkerImpl(socket, SyslogDispatcher.processRequest(router))
 
-  val adminServer = system.actorOf(Props(new VcmdAdminServerActor(new HaltableSocketServer(syslogListenerPort, workerFactory))))
+  //val adminServer = system.actorOf(Props(new VcmdAdminServerActor(new HaltableSocketServer(syslogListenerPort, workerFactory))))
 
-  val throttlerActor = system.actorOf(Props(new ThrottlerActor(adminServer)))
+  val throttlerActor = system.actorOf(Props(new ThrottlerActor(syslogListener)))
 
 
 }

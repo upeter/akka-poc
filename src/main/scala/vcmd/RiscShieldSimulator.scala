@@ -11,7 +11,7 @@ import akka.actor.IO._
 import akka.routing.RoundRobinRouter
 import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
-import io.NIOSocketServer
+import io._
 
 object RiscShieldServer {
   import scala.concurrent.ExecutionContext.Implicits.global
@@ -27,9 +27,9 @@ var start = 0l
 
 
         if (input.startsWith("stop")) {
-          ref ! "shutdown"
+          ref ! StopListening
           scheduler.scheduleOnce(10 seconds) {
-            ref ! "startup"
+            ref ! RestartListening
           }
         } else {
           //println(s"receive $input")

@@ -9,6 +9,9 @@ import java.io._
 import akka.actor.IO._
 import scala.concurrent.duration._
 
+case object StopListening
+case object RestartListening
+
 class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Scheduler) => IO.Iteratee[Unit]) extends Actor {
   val state = IO.IterateeRef.Map.async[IO.Handle]()(context.dispatcher)
   var serverHanlde: Option[ServerHandle] = None
@@ -21,20 +24,20 @@ class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Sched
       val socket = server.accept()
       println(s"Accept $socket")
       state(socket) flatMap (_ => inputHandler(socket, self, scheduler))
-    case IO.Read(socket, bytes)  => 
+    case IO.Read(socket, bytes) =>
       state(socket)(IO Chunk bytes)
     case IO.Closed(socket, cause) =>
       println(s"Closing $socket")
       state(socket)(IO.EOF)
       state -= socket
-    case "shutdown" =>
+    case StopListening =>
       stopListening
       state.foreach {
         case (handle, iteratee) =>
           handle.close
           state -= handle
       }
-    case "startup" =>
+    case RestartListening =>
       startListening
   }
 
@@ -44,6 +47,8 @@ class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Sched
   }
 
   private def startListening {
-    serverHanlde = Some(IOManager(context.system) listen new InetSocketAddress(port))
+    if (serverHanlde == None) {
+      serverHanlde = Some(IOManager(context.system) listen new InetSocketAddress(port))
+    }
   }
 }

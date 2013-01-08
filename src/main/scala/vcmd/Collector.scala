@@ -12,11 +12,11 @@ import akka.routing.RoundRobinRouter
 import scala.concurrent.{ Future, Promise, future }
 import scala.concurrent.duration._
 import scala.util.{ Try, Failure, Success }
-import io.NIOSocketServer
 import scala.concurrent.Await
 import akka.actor.SupervisorStrategy._
 import akka.dispatch.Terminate
 import config.Settings
+import io.{ NIOSocketServer, StopListening, RestartListening }
 
 package object vcmd {
   implicit val timeout: Timeout = 2 seconds
@@ -38,15 +38,13 @@ package object vcmd {
 sealed trait Message { def msg: String }
 case class RawMessage(msg: String) extends Message
 case class InitMessage(msg: String, meta: String) extends Message
-case class MessageSent(msg: Message)
-
-case object HaltConnections
-case object ResumeConnections
+case class MessageReceived
+case class MessageSent
 
 object SyslogListener {
   val riskShieldSender = new RiskShieldSender("localhost", 2345, 2000)
   import scala.concurrent.ExecutionContext.Implicits.global
-  def processRequest(processor: ActorRef)(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
+  def processRequest(processor: ActorRef, system: ActorSystem)(socket: IO.SocketHandle, self: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
 
     IO repeat {
       for {
@@ -57,6 +55,7 @@ object SyslogListener {
         //        val resp = riskShieldSender.send(msg)
         //        validateResult(msg)(resp)
         processor ! (RawMessage(msg))
+        system.eventStream.publish(MessageReceived())
       }
     }
   }
@@ -78,29 +77,39 @@ class ThrottlerActor(socketServerActor: ActorRef) extends Actor with ActorLoggin
   import settings._
   private var messagesInProgres: BigInt = 0
 
-  private def incrementCount() = messagesInProgres += 1 
-  private def decrementCount() = messagesInProgres -= 1
-  
-  def receive: Receive = {
-    case m: Message =>
-    	incrementCount()
-      if (highWatermarkMessageCount > messagesInProgres) {
+  listenTo(classOf[MessageReceived], classOf[MessageSent], classOf[DeadLetter])
+
+  def receive: Receive = deadLetter orElse {
+    case m: MessageReceived =>
+      incrementCount()
+      if (messagesInProgres > highWatermarkMessageCount) {
         log.info(s"Exceeded high watermark of $highWatermarkMessageCount messsages. Halt connections ...")
-        socketServerActor ! HaltConnections
+        socketServerActor ! StopListening
         context.become(highWatermarkExceeded)
       }
     case m: MessageSent => decrementCount()
   }
 
-  def highWatermarkExceeded: Receive = {
-    case m: Message => incrementCount()
+  def highWatermarkExceeded: Receive = deadLetter orElse {
+    case m: MessageReceived => incrementCount()
     case m: MessageSent =>
       decrementCount()
-      if (lowWatermarkMessageCount < messagesInProgres) {
-       log.info(s"Low watermark of $lowWatermarkMessageCount messages reached. Resume connections.")
-        socketServerActor ! ResumeConnections
+      if (messagesInProgres < lowWatermarkMessageCount) {
+        log.info(s"Low watermark of $lowWatermarkMessageCount messages reached. Resume connections.")
+        socketServerActor ! RestartListening
         context.unbecome
       }
+  }
+
+  private def deadLetter: Receive = {
+    case d: DeadLetter =>
+      decrementCount()
+      log.error(s"Message could not be processed ${d.message}")
+  }
+  private def incrementCount() = messagesInProgres += 1
+  private def decrementCount() = messagesInProgres -= 1
+  private def listenTo(events: Class[_]*) = events foreach { c =>
+    context.system.eventStream.subscribe(self, c)
   }
 
 }
@@ -115,7 +124,7 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
 
   private def initSender = new RiskShieldSender(riskShieldServerHost, riskShieldServerPort, riskShieldServerReadTimeout)
 
-  context.become(initializing)
+  def receive = initializing
 
   def initializing: Receive = {
     case RawMessage(msg) =>
@@ -126,13 +135,13 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
         //TODO: handle invalid return messages
         if (validateResult(req)(resp)) {
           log.debug("init ok: -> become receive")
-          context.become(receive)
+          context.become(defaultHandling)
         }
       })
   }
-  def receive = {
-    case msg @ RawMessage(_) => send(msg)
 
+  def defaultHandling: Receive = {
+    case msg @ RawMessage(_) => send(msg)
   }
 
   def reconnect: Receive = {
@@ -143,13 +152,17 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
         if (validateResult(req)(resp)) {
           log.debug("retry ok: unstashAll -> become receive")
           unstashAll
-          context.become(receive)
+          context.become(defaultHandling)
         }
       })
     }
     case message => stash
   }
 
+  //******************************************
+    //Private helper methods
+  //******************************************
+  
   private def doSend(msg: String): Try[String] = {
     val result = Try(riskShieldSender.send(msg))
     if (result.isFailure) {
@@ -158,6 +171,8 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
       log.error(reason)
       riskShieldSender.disconnect
       riskShieldSender = initSender
+    } else {
+      context.system.eventStream.publish(MessageSent())
     }
     result
   }
@@ -194,9 +209,11 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
 
     }
     def handleResult(res: Try[String], reqMsg: InitMessage) = {
+
       res match {
         //TODO: handle invalid return messages
-        case Success(resp) => onSuccess(reqMsg.msg, resp)
+        case Success(resp) =>
+          onSuccess(reqMsg.msg, resp)
         case Failure(e) => onFailure(reqMsg)
       }
     }

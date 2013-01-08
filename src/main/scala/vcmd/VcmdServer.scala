@@ -13,6 +13,7 @@ import java.net._
 import java.io._
 import akka.actor.IO._
 import scala.concurrent.duration._
+import io._
 class VcmdAdminServerActor(socketServer : => HaltableSocketServer) extends Actor with ActorLogging {
 
   val settings = config.Settings(context.system)
@@ -41,8 +42,8 @@ class VcmdAdminServerActor(socketServer : => HaltableSocketServer) extends Actor
       println(s"Closing $socket")
       adminConnections(socket)(IO.EOF)
       adminConnections -= socket
-    case HaltConnections => vcmdServer.haltConnections
-    case ResumeConnections => vcmdServer.resumeConnections
+    case StopListening => vcmdServer.haltConnections
+    case RestartListening => vcmdServer.resumeConnections
   }
 
   def processAdminRequest(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
