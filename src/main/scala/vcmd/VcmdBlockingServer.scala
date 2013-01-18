@@ -1,22 +1,42 @@
-package vcmd.io
+package vcmd
+
 
 import akka.actor.ActorLogging
 import akka.actor.Actor
+import io._
+import scala.concurrent.ExecutionContext.Implicits.global
 import akka.actor._
 import akka.actor.ActorDSL._
+import java.net.InetSocketAddress
 import akka.util._
 import java.net._
 import java.io._
 import akka.actor.IO._
 import scala.concurrent.duration._
-import vcmd.io._
-import vcmd._
+import org.apache.commons.pool.impl.GenericObjectPool
+import org.apache.commons.pool.ObjectPool
 
-object SyslogDispatcher {
+//listen to sent messages
+//add to pool 
+object BlockingSyslogDispatcher {
+  
+  def processRequest(actorPool:ObjectPool[ActorRef], system: ActorSystem)(msg: String) = {
+    //println(s"processing line $msg")
+    //borrow from Pool and send
+    
+    actorPool.borrowObject() ! (RawMessage(msg))
+    system.eventStream.publish(MessageReceived())
+  }
 
-  def processRequest(processor: ActorRef)(msg: String) = {
+}
+
+
+object NonBlockingSyslogDispatcher {
+  
+  def processRequest(processor:ActorRef, system: ActorSystem)(msg: String) = {
     //println(s"processing line $msg")
     processor ! (RawMessage(msg))
+     system.eventStream.publish(MessageReceived())
   }
 
 }
@@ -38,7 +58,7 @@ class VcmdAdminServerActor(socketServer : => HaltableSocketServer) extends Actor
   override def postStop {
     vcmdServer.stop
   }
- 
+
   def receive: Receive = {
     case IO.NewClient(server) =>
       val socket = server.accept()
@@ -50,8 +70,13 @@ class VcmdAdminServerActor(socketServer : => HaltableSocketServer) extends Actor
       println(s"Closing $socket")
       adminConnections(socket)(IO.EOF)
       adminConnections -= socket
-    case StopListening => vcmdServer.haltConnections
-    case RestartListening => vcmdServer.resumeConnections
+    case StopListening =>
+         vcmdServer.haltConnections
+         println("Connections halted")
+    case RestartListening =>
+       vcmdServer.resumeConnections
+         println("Connections resumed")
+      
   }
 
   def processAdminRequest(socket: IO.SocketHandle, ref: ActorRef, scheduler: Scheduler): IO.Iteratee[Unit] = {
@@ -78,6 +103,24 @@ class VcmdAdminServerActor(socketServer : => HaltableSocketServer) extends Actor
         write("resume done")
       case none => write(s"unkown command: $none")
     }
+  }
+
+}
+
+class PoolHandlerActor(actorRefPool: ObjectPool[ActorRef]) extends Actor with ActorLogging {
+
+  listenTo(classOf[MessageSent], classOf[DeadLetter])
+
+  def receive: Receive = deadLetter orElse {
+    case MessageSent(actorRef) => actorRefPool.returnObject(actorRef)
+  }
+
+  private def deadLetter: Receive = {
+    case d: DeadLetter =>
+      log.error(s"Message could not be processed ${d.message}")
+  }
+  private def listenTo(events: Class[_]*) = events foreach { c =>
+    context.system.eventStream.subscribe(self, c)
   }
 
 }

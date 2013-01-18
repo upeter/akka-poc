@@ -1,4 +1,4 @@
-package vcmd.server
+package vcmd.io
 
 import java.net.Socket
 import java.io.IOException
@@ -6,6 +6,7 @@ import java.net.ServerSocket
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import scala.concurrent.ExecutionContext
+import akka.actor.ActorRef
 
 class HaltableSocketServer(port: Int, workerFactory:Socket => Worker)(implicit executer: ExecutionContext) extends Runnable {
   @volatile
@@ -60,7 +61,11 @@ trait Worker extends Runnable {
 }
 
 
-class WorkerImpl(clientSocket: Socket, handleLine:String => Any) extends Worker with Runnable {
+
+
+
+
+class HaltableWorkerImpl(clientSocket: Socket, handleLine:String => Any) extends Worker with Runnable {
 
   var mute = false;
 

@@ -80,6 +80,11 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
     }
     case message => stash
   }
+  
+  override def postStop = {
+     log.info(s"Stopping actor ${self}")
+    riskShieldSender.disconnect
+  }
 
   //******************************************
   //Private helper methods
@@ -94,7 +99,7 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
       riskShieldSender.disconnect
       riskShieldSender = initSender
     } else {
-      context.system.eventStream.publish(MessageSent())
+      context.system.eventStream.publish(MessageSent(self))
     }
     result
   }

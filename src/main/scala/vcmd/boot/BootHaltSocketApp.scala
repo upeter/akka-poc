@@ -12,9 +12,11 @@ import vcmd.config.Settings
 import akka.util.Timeout.durationToTimeout
 import vcmd.RiskShieldSenderActor
 import vcmd.SyslogListener
+import vcmd.io.HaltableWorkerImpl
+import vcmd.io.HaltableSocketServer
 import vcmd._
- 
-object Boot extends App {
+
+object BootHaltSocketApp extends App {
   implicit val timeout: Timeout = 4 seconds
   val system = ActorSystem("vcmd")
   val settings = Settings(system)
@@ -22,8 +24,8 @@ object Boot extends App {
   implicit val dispatcher = system.dispatcher
 
   val router = system.actorOf(Props(new RiskShieldSenderMasterActor(Props[RiskShieldSenderActor])))
-  val syslogListener = system.actorOf(Props(new NIOSocketServer(syslogListenerPort, SyslogListener.processRequest(router, system))), "sysloglistener")
-  val throttlerActor = system.actorOf(Props(new ThrottlerActor(syslogListener)))
-
+  val workerFactory = (socket: Socket) => new HaltableWorkerImpl(socket, NonBlockingSyslogDispatcher.processRequest(router, system))
+  val adminServer = system.actorOf(Props(new VcmdAdminServerActor(new HaltableSocketServer(syslogListenerPort, workerFactory))))
+  val throttlerActor = system.actorOf(Props(new ThrottlerActor(adminServer)))
 
 }
