@@ -8,39 +8,40 @@ import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
 import SyslogClient._
 object SocketTest extends App {
-try {
+  try {
     val to = 500000
+    val resetter = new Tester(port = 2345)
+    resetter.sendAndForget("reset")
     val tester = new Tester
-  val (elapsed, _) = measure {
-    1 to to foreach (i => tester.log(s"$i"))
-  }
-} catch {
-  case e => e.printStackTrace()
-}
-    
-  println(s"===========================================>total sent: $to, elapsed $elapsed ms, tps ${to / elapsed * 1000}")
 
- // (1 to 5).map(i => new Tester).foreach(_.test)
+    val (elapsed, _) = measure {
+      1 to to foreach (i => tester.sendAndForget(s"$i"))
+    }
+  } catch {
+    case e => e.printStackTrace()
+  }
+
+  //println(s"===========================================>total sent: $to, elapsed $elapsed ms, tps ${to / elapsed * 1000}")
+
+  // (1 to 5).map(i => new Tester).foreach(_.test)
 }
 
 class SocketReadException extends Exception
 
-class Tester {
+class Tester(val host: String = "localhost", val port: Int = 1234) {
 
-  val host = "localhost"
-  val port = 1234
-  val riscShieldSocket = {
+  val vcmdSocket = {
     val adr = new InetSocketAddress(host, port)
     val socket = new Socket()
     socket.setSoTimeout(1000)
     socket.connect(adr)
     socket
   }
-  def send(msg: String): String = {
+  def sendAndReceive(msg: String): String = {
     try {
-      val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
+      val out = new PrintWriter(new OutputStreamWriter(vcmdSocket.getOutputStream(), "utf-8"), true);
       val in = new BufferedReader(new InputStreamReader(
-        riscShieldSocket.getInputStream(), "utf-8"));
+        vcmdSocket.getInputStream(), "utf-8"));
       out.println(msg)
       Option(in.readLine()) match {
         case Some(resp) => resp
@@ -52,19 +53,19 @@ class Tester {
         throw e
     }
   }
-  
-    def log(msg: String): Unit = {
-        //Thread.sleep(1000)
-        //println(msg)
-      val out = new PrintWriter(new OutputStreamWriter(riscShieldSocket.getOutputStream(), "utf-8"), true);
-      out.println(msg)
-      out.flush
-    }
+
+  def sendAndForget(msg: String): Unit = {
+    //Thread.sleep(1000)
+    //println(msg)
+    val out = new PrintWriter(new OutputStreamWriter(vcmdSocket.getOutputStream(), "utf-8"), true);
+    out.println(msg)
+    out.flush
+  }
 
   def test() {
     val res = 1 to 10000 foreach { i =>
       Thread.sleep(300)
-      val resp = send(i.toString)
+      val resp = sendAndReceive(i.toString)
       val expected = s"echo: $i"
       val equal = resp == expected
       if (!equal) {
