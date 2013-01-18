@@ -21,7 +21,7 @@ import io.{ NIOSocketServer, StopListening, RestartListening }
 package object vcmd {
   implicit val timeout: Timeout = 2 seconds
 
-  def validateResult(in: String)(resp: String) = {
+  def validateEcho(in: String)(resp: String) = {
 
     val expected = s"echo: $in"
     val equal = expected.startsWith(resp)
@@ -33,12 +33,21 @@ package object vcmd {
     equal
 
   }
+
+  def validateResponse(resp: String) = {
+    val valid = resp.startsWith("1")
+    if (!valid) {
+      println(s"expected response starting with 1 but received $resp")
+    }
+    valid
+
+  }
+
 }
 
 import vcmd._
 class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
   import context.dispatcher
-
   val settings = Settings(context.system)
   import settings._
   val scheduler = context.system.scheduler
@@ -53,12 +62,8 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
       log.debug("send init message...")
       //TODO: lookup metadata in cache
       send(InitMessage(msg, "Metadata"), onSuccess = (req, resp) => {
-        log.debug("init sent: -> validate...")
-        //TODO: handle invalid return messages
-        if (validateResult(req)(resp)) {
-          log.debug("init ok: -> become receive")
-          context.become(defaultHandling)
-        }
+        log.debug("init ok: -> become receive")
+        context.become(defaultHandling)
       })
   }
 
@@ -70,19 +75,16 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
     case msg: InitMessage => {
       log.debug(s"retry message=[${msg}]...")
       send(msg, onSuccess = (req, resp) => {
-        //TODO: handle invalid return messages
-        if (validateResult(req)(resp)) {
-          log.debug("retry ok: unstashAll -> become receive")
-          unstashAll
-          context.become(defaultHandling)
-        }
+        log.debug("retry ok: unstashAll -> become receive")
+        unstashAll
+        context.become(defaultHandling)
       })
     }
     case message => stash
   }
-  
+
   override def postStop = {
-     log.info(s"Stopping actor ${self}")
+    log.info(s"Stopping actor ${self}")
     riskShieldSender.disconnect
   }
 
@@ -90,21 +92,25 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
   //Private helper methods
   //******************************************
 
-  private def doSend(msg: String): Try[String] = {
-    val result = Try(riskShieldSender.send(msg))
-    if (result.isFailure) {
-      val Failure(e) = result
+  private def doSend[T](fun: => T): Try[T] = {
+   def preHandleFailure(e: Throwable) = {
       val reason = s"${e.getClass().getSimpleName()} occured ${e.getMessage()}. Close connection."
       log.error(reason)
       riskShieldSender.disconnect
       riskShieldSender = initSender
+    }
+
+    val result = Try(fun)
+    if (result.isFailure) {
+      val Failure(e) = result
+      preHandleFailure(e)
     } else {
       context.system.eventStream.publish(MessageSent(self))
     }
     result
   }
 
-  private def handleFailureDefault(msg: InitMessage) = {
+  private def onFailureDefault(msg: InitMessage) = {
     log.error(s"Failure occured. Schedule retry in ${riskShieldRetryInterval} millis.")
     scheduler.scheduleOnce(riskShieldRetryInterval milliseconds) {
       self ! msg
@@ -113,21 +119,22 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
     context.become(reconnect)
   }
 
-  private def handleSuccessDefault(req: String, resp: String): Unit = {
-    validateResult(req)(resp)
-  }
+  private def onSuccessDefault(req: String, resp: String): Unit = { /*empty*/}
 
-  private def send(msg: Message, onSuccess: (String, String) => Unit = handleSuccessDefault, onFailure: InitMessage => Unit = handleFailureDefault) = {
+  private def send(msg: Message, onSuccess: (String, String) => Unit = onSuccessDefault, onFailure: InitMessage => Unit = onFailureDefault) = {
     msg match {
       case raw @ RawMessage(msg) =>
-        val res = doSend(msg)
+        val res = for {
+          resp <- doSend(riskShieldSender.sendAndReceive(msg))
+          if validateResponse(resp)
+        } yield resp
         handleResult(res, InitMessage(msg, "Metadata"))
       case init @ InitMessage(msg, meta) => {
         val res = for {
-          metaResp <- doSend(meta)
-          if validateResult(meta)(metaResp)
-          resp <- doSend(msg)
-          if validateResult(msg)(resp)
+          empty <- doSend(riskShieldSender.send(meta))
+          headerResp <- doSend(riskShieldSender.sendAndReceive(msg))
+          resp <- doSend(riskShieldSender.read())
+          if validateResponse(resp)
         } yield resp
         handleResult(res, init)
 
@@ -136,9 +143,7 @@ class RiskShieldSenderActor extends Actor with ActorLogging with Stash {
 
     }
     def handleResult(res: Try[String], reqMsg: InitMessage) = {
-
       res match {
-        //TODO: handle invalid return messages
         case Success(resp) =>
           onSuccess(reqMsg.msg, resp)
         case Failure(e) => onFailure(reqMsg)
@@ -157,17 +162,29 @@ class RiskShieldSender(host: String, port: Int, readTimeout: Int) {
     socket.connect(adr)
     socket
   }
-  def send(msg: String): String = {
-    val out = new PrintWriter(new OutputStreamWriter(riskShieldSocket.getOutputStream(), "utf-8"), true);
-    val in = new BufferedReader(new InputStreamReader(
-      riskShieldSocket.getInputStream(), "utf-8"));
-    out.println(msg)
+
+  lazy private val in = new BufferedReader(new InputStreamReader(
+    riskShieldSocket.getInputStream(), "utf-8"));
+
+  lazy private val out = new PrintWriter(new OutputStreamWriter(riskShieldSocket.getOutputStream(), "utf-8"), true);
+
+  def sendAndReceive(msg: String): String = {
+    send(msg)
+    read()
+  }
+
+  def read(times: Int = 1): String = {
     Option(in.readLine()) match {
       case Some(resp) => resp
       case None =>
         throw new SocketReadException("No response received")
     }
 
+  }
+
+  def send(msg: String): Unit = {
+    out.println(msg)
+    out.flush
   }
 
   def disconnect {

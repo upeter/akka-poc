@@ -40,12 +40,12 @@ object BootBlockSocketApp extends App {
     val maxActive = 50
     val whenExhaustedAction = GenericObjectPool.WHEN_EXHAUSTED_BLOCK
     val maxWait = -1l
-    val maxIdle = 200
-    val minIdle = 50
+    val maxIdle = -1
+    val minIdle = 10
     val testOnBorrow = true
     val testOnReturn = false
     val timeBetweenEvictionRunsMillis = -1l// 1000l * 60l * 10l
-    val numTestsPerEvictionRun = 10
+    val numTestsPerEvictionRun = -1
     val minEvictableIdleTimeMillis =  -1l //1000l * 60l * 10l
     val testWhileIdle = false
     val softMinEvictableIdleTimeMillis = -1l

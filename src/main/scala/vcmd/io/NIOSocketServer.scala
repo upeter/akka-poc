@@ -11,8 +11,12 @@ import scala.concurrent.duration._
 
 case object StopListening
 case object RestartListening
-
-class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Scheduler) => IO.Iteratee[Unit]) extends Actor {
+object NIOSocketServer {
+  
+  def closeSocketDefault(socket:IO.Handle):Unit = ()
+  def openSocketDefault(socket:IO.Handle):Unit = ()
+}
+class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Scheduler) => IO.Iteratee[Unit], onSocketOpen:IO.Handle => Unit = NIOSocketServer.openSocketDefault, onSocketClose:IO.Handle => Unit = NIOSocketServer.closeSocketDefault) extends Actor {
   val state = IO.IterateeRef.Map.async[IO.Handle]()(context.dispatcher)
   var serverHanlde: Option[ServerHandle] = None
   val scheduler = context.system.scheduler
@@ -22,6 +26,7 @@ class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Sched
   def receive = {
     case IO.NewClient(server) =>
       val socket = server.accept()
+      onSocketOpen(socket)
       println(s"Accept $socket")
       state(socket) flatMap (_ => inputHandler(socket, self, scheduler))
     case IO.Read(socket, bytes) =>
@@ -29,6 +34,7 @@ class NIOSocketServer(port: Int, inputHandler: (IO.SocketHandle, ActorRef, Sched
     case IO.Closed(socket, cause) =>
       println(s"Closing $socket")
       state(socket)(IO.EOF)
+      onSocketClose(socket)
       state -= socket
     case StopListening =>
       stopListening

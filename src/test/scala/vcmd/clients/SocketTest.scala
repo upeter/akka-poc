@@ -12,11 +12,14 @@ object SocketTest extends App {
     val to = 500000
     val resetter = new Tester(port = 2345)
     resetter.sendAndForget("reset")
+    resetter.close
+    
     val tester = new Tester
 
     val (elapsed, _) = measure {
       1 to to foreach (i => tester.sendAndForget(s"$i"))
     }
+    tester.close
   } catch {
     case e => e.printStackTrace()
   }
@@ -37,16 +40,19 @@ class Tester(val host: String = "localhost", val port: Int = 1234) {
     socket.connect(adr)
     socket
   }
-  def sendAndReceive(msg: String): String = {
+  def sendAndReceive(msg: String, times: Int = 1): String = {
     try {
       val out = new PrintWriter(new OutputStreamWriter(vcmdSocket.getOutputStream(), "utf-8"), true);
       val in = new BufferedReader(new InputStreamReader(
         vcmdSocket.getInputStream(), "utf-8"));
       out.println(msg)
-      Option(in.readLine()) match {
-        case Some(resp) => resp
-        case None => throw new SocketReadException
+      val res = (1 to times) map { c =>
+        Option(in.readLine()) match {          
+          case Some(resp) => println(resp);resp
+          case None => throw new SocketReadException
+        }
       }
+      res.reverse.head
     } catch {
       case e =>
         println(e.getClass().getName() + " " + e.getMessage())
@@ -54,6 +60,8 @@ class Tester(val host: String = "localhost", val port: Int = 1234) {
     }
   }
 
+  def close() = vcmdSocket.close
+  
   def sendAndForget(msg: String): Unit = {
     //Thread.sleep(1000)
     //println(msg)
